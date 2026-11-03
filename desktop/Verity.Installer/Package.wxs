@@ -1,0 +1,8 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+ <Package Name="Verity Face Attendance" Manufacturer="Verity" Version="0.1.0" UpgradeCode="A8D46A27-E132-4C61-8D14-7D4A0C45B119" Scope="perMachine">
+  <MajorUpgrade DowngradeErrorMessage="A newer version of Verity is already installed."/><MediaTemplate EmbedCab="yes"/>
+  <StandardDirectory Id="ProgramFiles64Folder"><Directory Id="INSTALLFOLDER" Name="Verity Face Attendance"/></StandardDirectory>
+  <Feature Id="MainFeature"><ComponentGroupRef Id="ApplicationFiles"/></Feature>
+ </Package>
+ <Fragment><ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER"><Files Include="$(PublishDir)\**\*"/></ComponentGroup></Fragment>
+</Wix>

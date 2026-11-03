@@ -1,0 +1,1 @@
+"""Verity local recognition worker."""

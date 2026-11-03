@@ -1,0 +1,40 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Verity.Desktop", "Verity.Desktop\Verity.Desktop.csproj", "{336318B2-FD44-484F-AD3E-2B06004D4F03}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Verity.Contracts", "Verity.Contracts\Verity.Contracts.csproj", "{6920D532-BB69-4957-B678-6809C24DEA89}"
+EndProject
+Project("{B7DD6F7E-DEF8-4E67-B5B7-07EF123DB6F0}") = "Verity.Installer", "Verity.Installer\Verity.Installer.wixproj", "{8CC6F903-C446-4EBA-87A3-BF0DA13D01D0}"
+EndProject
+Project("{B7DD6F7E-DEF8-4E67-B5B7-07EF123DB6F0}") = "Verity.Bootstrapper", "Verity.Bootstrapper\Verity.Bootstrapper.wixproj", "{56483A38-94B1-4B31-BEF9-5879CC072923}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{336318B2-FD44-484F-AD3E-2B06004D4F03}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{336318B2-FD44-484F-AD3E-2B06004D4F03}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{336318B2-FD44-484F-AD3E-2B06004D4F03}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{336318B2-FD44-484F-AD3E-2B06004D4F03}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6920D532-BB69-4957-B678-6809C24DEA89}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6920D532-BB69-4957-B678-6809C24DEA89}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6920D532-BB69-4957-B678-6809C24DEA89}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6920D532-BB69-4957-B678-6809C24DEA89}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8CC6F903-C446-4EBA-87A3-BF0DA13D01D0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8CC6F903-C446-4EBA-87A3-BF0DA13D01D0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8CC6F903-C446-4EBA-87A3-BF0DA13D01D0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8CC6F903-C446-4EBA-87A3-BF0DA13D01D0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{56483A38-94B1-4B31-BEF9-5879CC072923}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{56483A38-94B1-4B31-BEF9-5879CC072923}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{56483A38-94B1-4B31-BEF9-5879CC072923}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{56483A38-94B1-4B31-BEF9-5879CC072923}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

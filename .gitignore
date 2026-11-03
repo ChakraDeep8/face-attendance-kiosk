@@ -3,3 +3,12 @@ dist/
 data/
 *.tsbuildinfo
 .env
+desktop/**/bin/
+desktop/**/obj/
+desktop/worker/.venv/
+desktop/worker/build/
+desktop/worker/dist/
+desktop/worker/models/
+desktop/artifacts/
+**/__pycache__/
+*.pyc

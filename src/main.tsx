@@ -1,6 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   Camera,
   Check,
   ChevronRight,
@@ -12,7 +16,9 @@ import {
   LogOut,
   Menu,
   Settings,
+  ScanFace,
   ShieldCheck,
+  Siren,
   Trash2,
   Upload,
   UserPlus,
@@ -21,10 +27,15 @@ import {
 } from "lucide-react";
 import "./styles.css";
 import { api, type ApiEvent, type ApiPerson } from "./api";
+import { cameraSource, openExperimentCamera } from "./camera";
 import {
+  captureEnrollmentPose,
+  combinePoseDescriptors,
   describeEnrollment,
   describeLiveBurst,
   prepareFaceEngine,
+  type EnrollmentPose,
+  type FaceDescriptor,
 } from "./face";
 
 type Person = {
@@ -157,7 +168,7 @@ function App() {
     name: string;
     employeeId: string;
     image: string;
-    embedding: number[];
+    embeddings: number[][];
     consent: boolean;
   }) => {
     const p = await api.register(input);
@@ -304,9 +315,12 @@ function App() {
         {tab === "overview" && (
           <Overview people={people} events={events} go={navigate} />
         )}{" "}
-        {tab === "register" && <Register onAdd={addPerson} />}{" "}
+        {tab === "register" && <GuidedRegister onAdd={addPerson} />}{" "}
         {tab === "kiosk" && (
-          <Kiosk people={people} onEvent={(e) => setEvents((x) => [e, ...x])} />
+          <ContinuousKiosk
+            people={people}
+            onEvent={(e) => setEvents((x) => [e, ...x])}
+          />
         )}{" "}
         {tab === "people" && (
           <People people={people} setPeople={setPeople} onNotice={setNotice} />
@@ -718,13 +732,7 @@ function Kiosk({
     setError("");
     setResult(null);
     try {
-      stream.current = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: "user",
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-      });
+      stream.current = await openExperimentCamera("enrollment");
       setActive(true);
       requestAnimationFrame(() => {
         if (video.current) video.current.srcObject = stream.current;
@@ -877,6 +885,512 @@ function Kiosk({
     </div>
   );
 }
+const enrollmentPoses: {
+  pose: EnrollmentPose;
+  label: string;
+  icon: React.ReactNode;
+}[] = [
+  { pose: "center", label: "Look straight", icon: <ScanFace size={32} /> },
+  { pose: "left", label: "Turn left slowly", icon: <ArrowLeft size={32} /> },
+  { pose: "right", label: "Turn right slowly", icon: <ArrowRight size={32} /> },
+  { pose: "up", label: "Look up slowly", icon: <ArrowUp size={32} /> },
+  { pose: "down", label: "Look down slowly", icon: <ArrowDown size={32} /> },
+];
+
+function GuidedRegister({
+  onAdd,
+}: {
+  onAdd: (input: {
+    name: string;
+    employeeId: string;
+    image: string;
+    embeddings: number[][];
+    consent: boolean;
+  }) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [employeeId, setEmployeeId] = useState("");
+  const [consent, setConsent] = useState(false);
+  const [active, setActive] = useState(false);
+  const [poseIndex, setPoseIndex] = useState(0);
+  const [captured, setCaptured] = useState(0);
+  const [feedback, setFeedback] = useState(
+    "Camera guidance will begin automatically",
+  );
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const video = useRef<HTMLVideoElement>(null);
+  const stream = useRef<MediaStream | null>(null);
+  const cancelled = useRef(false);
+  useEffect(
+    () => () => {
+      cancelled.current = true;
+      stream.current?.getTracks().forEach((track) => track.stop());
+    },
+    [],
+  );
+
+  const frame = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = video.current?.videoWidth || 960;
+    canvas.height = video.current?.videoHeight || 720;
+    canvas
+      .getContext("2d")
+      ?.drawImage(video.current!, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.9);
+  };
+  const waitForVideo = async () => {
+    for (let i = 0; i < 30; i++) {
+      if (video.current?.readyState && video.current.videoWidth) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error("Camera did not become ready. Please restart enrollment.");
+  };
+  const start = async () => {
+    if (!name.trim() || !employeeId.trim() || !consent) {
+      setError(
+        "Enter the person’s details and confirm consent before starting.",
+      );
+      return;
+    }
+    setError("");
+    setBusy(true);
+    setCaptured(0);
+    setPoseIndex(0);
+    cancelled.current = false;
+    try {
+      stream.current = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "user",
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      });
+      setActive(true);
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      if (video.current) video.current.srcObject = stream.current;
+      await waitForVideo();
+      const samples: FaceDescriptor[] = [];
+      let image = "";
+      for (
+        let index = 0;
+        index < enrollmentPoses.length && !cancelled.current;
+        index++
+      ) {
+        setPoseIndex(index);
+        setFeedback(enrollmentPoses[index].label);
+        let accepted = false;
+        while (!accepted && !cancelled.current) {
+          try {
+            const result = await captureEnrollmentPose(
+              video.current!,
+              enrollmentPoses[index].pose,
+            );
+            setFeedback(result.feedback);
+            if (result.accepted && result.descriptor) {
+              samples.push(result.descriptor);
+              if (index === 0) image = frame();
+              setCaptured(samples.length);
+              accepted = true;
+              await new Promise((resolve) => setTimeout(resolve, 650));
+            }
+          } catch (e) {
+            setFeedback(
+              e instanceof Error ? e.message : "Hold still and try again",
+            );
+          }
+          if (!accepted)
+            await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+      }
+      if (!cancelled.current) {
+        setFeedback("Creating secure face profile…");
+        const combined = combinePoseDescriptors(samples);
+        await onAdd({
+          name,
+          employeeId,
+          image,
+          embeddings: [...samples.map((item) => item.embedding), combined],
+          consent,
+        });
+      }
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Enrollment could not be completed.",
+      );
+    } finally {
+      stream.current?.getTracks().forEach((track) => track.stop());
+      setActive(false);
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="guided-layout">
+      <section className="enrollment-copy">
+        <span className="eyebrow">Guided identity enrollment · {cameraSource}</span>
+        <h2>
+          Register once.
+          <br />
+          <i>Recognize reliably.</i>
+        </h2>
+        <p>
+          The camera automatically captures five head positions. Move slowly and
+          keep your face inside the oval.
+        </p>
+        <div className="pose-list">
+          {enrollmentPoses.map((item, index) => (
+            <div
+              className={`pose-step ${index < captured ? "done" : index === poseIndex && active ? "current" : ""}`}
+              key={item.pose}
+            >
+              <span>{index < captured ? <Check size={14} /> : index + 1}</span>
+              <b>{item.label}</b>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="guided-card">
+        <div className="guided-fields">
+          <label>
+            Full name
+            <input
+              value={name}
+              disabled={active}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Anika Rao"
+            />
+          </label>
+          <label>
+            Employee ID
+            <input
+              value={employeeId}
+              disabled={active}
+              onChange={(e) => setEmployeeId(e.target.value)}
+              placeholder="e.g. EST-0241"
+            />
+          </label>
+        </div>
+        <div className={`guided-camera ${active ? "is-live" : ""}`}>
+          {active ? (
+            <>
+              <video ref={video} autoPlay muted playsInline />
+              <div className="enroll-oval" />
+              <div
+                className={`pose-animation ${enrollmentPoses[poseIndex].pose}`}
+              >
+                {enrollmentPoses[poseIndex].icon}
+                <b>{enrollmentPoses[poseIndex].label}</b>
+              </div>
+              <div className="landmark-badge">
+                <ScanFace size={14} /> 468-point mesh
+              </div>
+            </>
+          ) : (
+            <div className="camera-placeholder">
+              <div className="scan-ring">
+                <ScanFace size={30} />
+              </div>
+              <b>Ready for guided capture</b>
+              <small>Five positions · about 20 seconds</small>
+            </div>
+          )}
+        </div>
+        <div className="enrollment-progress">
+          <i>
+            <span
+              style={{ width: `${(captured / enrollmentPoses.length) * 100}%` }}
+            />
+          </i>
+          <b>
+            {captured} of {enrollmentPoses.length} captured
+          </b>
+        </div>
+        <p className="capture-feedback">{feedback}</p>
+        {error && (
+          <div className="form-error">
+            <X size={16} />
+            {error}
+          </div>
+        )}
+        <label className="consent">
+          <input
+            type="checkbox"
+            disabled={active}
+            checked={consent}
+            onChange={(e) => setConsent(e.target.checked)}
+          />
+          <span>
+            I have permission to register this person’s biometric face data for
+            workplace access and attendance.
+          </span>
+        </label>
+        <button className="button primary full" disabled={busy} onClick={start}>
+          {busy ? "Enrollment in progress…" : "Start guided enrollment"}{" "}
+          {!busy && <ChevronRight size={17} />}
+        </button>
+      </section>
+    </div>
+  );
+}
+
+let alarmContext: AudioContext | null = null;
+function armUnauthorizedAlarm() {
+  try {
+    const Audio = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    alarmContext ||= new Audio();
+    alarmContext.resume();
+  } catch { alarmContext = null; }
+}
+function playUnauthorizedAlarm() {
+  try {
+    const context = alarmContext;
+    if (!context) return;
+    [0, 0.22, 0.44].forEach((delay) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "square";
+      oscillator.frequency.value = 740;
+      gain.gain.setValueAtTime(0.12, context.currentTime + delay);
+      gain.gain.exponentialRampToValueAtTime(
+        0.001,
+        context.currentTime + delay + 0.18,
+      );
+      oscillator.connect(gain).connect(context.destination);
+      oscillator.start(context.currentTime + delay);
+      oscillator.stop(context.currentTime + delay + 0.2);
+    });
+  } catch {
+    /* visual alert remains available */
+  }
+}
+
+function ContinuousKiosk({
+  people,
+  onEvent,
+}: {
+  people: Person[];
+  onEvent: (event: Event) => void;
+}) {
+  const [active, setActive] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [status, setStatus] = useState("Camera is standing by");
+  const [result, setResult] = useState<Event | null>(null);
+  const [alert, setAlert] = useState(false);
+  const video = useRef<HTMLVideoElement>(null);
+  const stream = useRef<MediaStream | null>(null);
+  const running = useRef(false);
+  const wakeLock = useRef<{ release: () => Promise<void> } | null>(null);
+  const lastAlert = useRef(0);
+  const stop = async () => {
+    running.current = false;
+    stream.current?.getTracks().forEach((track) => track.stop());
+    await wakeLock.current?.release().catch(() => {});
+    setActive(false);
+    setScanning(false);
+    setStatus("Monitoring stopped");
+  };
+  useEffect(
+    () => () => {
+      running.current = false;
+      stream.current?.getTracks().forEach((track) => track.stop());
+    },
+    [],
+  );
+  const monitor = async () => {
+    while (running.current) {
+      try {
+        setScanning(true);
+        setStatus("Scanning for a face…");
+        const face = await describeLiveBurst(video.current!, 3);
+        if (!running.current) break;
+        setStatus("Comparing with authorized employees…");
+        const item = await api.checkIn(face.embedding);
+        const mapped: Event = {
+          ...item,
+          time: new Date(item.at).toLocaleTimeString("en-US", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+          }),
+        };
+        setResult(mapped);
+        onEvent(mapped);
+        if (mapped.result === "Rejected") {
+          setAlert(true);
+          setStatus("Unauthorized person detected");
+          if (Date.now() - lastAlert.current > 5000) {
+            playUnauthorizedAlarm();
+            lastAlert.current = Date.now();
+          }
+          await new Promise((resolve) => setTimeout(resolve, 4500));
+          setAlert(false);
+        } else {
+          setStatus(
+            mapped.result === "Verified"
+              ? `${mapped.person} checked in`
+              : `${mapped.person} is already checked in`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+        }
+      } catch (e) {
+        const message =
+          e instanceof Error ? e.message : "Waiting for a clear face";
+        if (!message.startsWith("No face found")) setStatus(message);
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      } finally {
+        setScanning(false);
+      }
+    }
+  };
+  const start = async () => {
+    try {
+      armUnauthorizedAlarm();
+      stream.current = await openExperimentCamera("monitoring");
+      setActive(true);
+      running.current = true;
+      setStatus("Starting continuous monitoring…");
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      if (video.current) video.current.srcObject = stream.current;
+      try {
+        wakeLock.current =
+          (await (
+            navigator as Navigator & {
+              wakeLock?: {
+                request: (
+                  type: "screen",
+                ) => Promise<{ release: () => Promise<void> }>;
+              };
+            }
+          ).wakeLock?.request("screen")) || null;
+      } catch {
+        wakeLock.current = null;
+      }
+      monitor();
+    } catch {
+      setStatus("Camera permission is required for continuous monitoring");
+    }
+  };
+  return (
+    <div className="monitor-page">
+      <section className="monitor-header">
+        <div>
+          <span className="eyebrow">Experimental access monitor · {cameraSource}</span>
+          <h2>
+            Always watching.
+            <br />
+            <i>Only employees enter.</i>
+          </h2>
+          <p>
+            Every detected face is automatically compared with the authorized
+            employee roster. Unknown faces trigger an on-screen and audible
+            alert.
+          </p>
+        </div>
+        <div className={`monitor-state ${active ? "online" : ""}`}>
+          <i />
+          <div>
+            <b>{active ? "Monitoring live" : "Monitoring offline"}</b>
+            <small>{people.length} authorized employees</small>
+          </div>
+        </div>
+      </section>
+      <section className={`monitor-camera ${alert ? "unauthorized" : ""}`}>
+        <video ref={video} autoPlay muted playsInline />
+        <div className="monitor-grid" />
+        <div className="face-guide">
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="monitor-top">
+          <span className="live-dot">
+            <i /> {active ? "LIVE · CONTINUOUS" : "OFFLINE"}
+          </span>
+          <span>
+            <ScanFace size={15} /> 468 landmarks
+          </span>
+        </div>
+        {!active && (
+          <div className="monitor-empty">
+            <ScanFace size={42} />
+            <h3>Start continuous access monitoring</h3>
+            <p>The camera remains active until an administrator stops it.</p>
+            <button className="button cream" onClick={start}>
+              <Camera size={17} /> Enable 24×7 camera
+            </button>
+          </div>
+        )}
+        {active && (
+          <div className="monitor-status">
+            <span className={scanning ? "scanner active" : "scanner"} />
+            <b>{status}</b>
+          </div>
+        )}
+        {result && active && !alert && (
+          <div
+            className={`identity-toast ${result.result === "Rejected" ? "rejected" : "verified"}`}
+          >
+            <div className="avatar">
+              {result.result === "Rejected" ? "?" : initials(result.person)}
+            </div>
+            <div>
+              <span>
+                {result.result === "Verified"
+                  ? "AUTHORIZED"
+                  : result.result === "Duplicate"
+                    ? "KNOWN EMPLOYEE"
+                    : "UNKNOWN"}
+              </span>
+              <b>{result.person}</b>
+              <small>
+                {result.confidence}% match · {result.time}
+              </small>
+            </div>
+          </div>
+        )}
+        {alert && (
+          <div className="intruder-alert">
+            <div className="siren">
+              <Siren size={34} />
+            </div>
+            <span>SECURITY ALERT</span>
+            <h3>Unauthorized person detected</h3>
+            <p>
+              No matching employee profile was found. Confidence:{" "}
+              {result?.confidence || 0}%
+            </p>
+            <button onClick={() => setAlert(false)}>Acknowledge alert</button>
+          </div>
+        )}
+      </section>
+      <div className="monitor-controls">
+        <div>
+          <i className={active ? "on" : ""} />
+          <span>
+            <b>{status}</b>
+            <small>
+              {active
+                ? "Camera and recognition model are continuously active"
+                : "Camera is not recording"}
+            </small>
+          </span>
+        </div>
+        {active && (
+          <button className="button secondary danger-action" onClick={stop}>
+            Stop monitoring
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function People({
   people,
   setPeople,

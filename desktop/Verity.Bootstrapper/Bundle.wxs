@@ -1,0 +1,18 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle Name="Verity Face Attendance"
+          Manufacturer="Verity"
+          Version="0.1.0.0"
+          UpgradeCode="6D3C9937-C3AA-4C9B-B17C-73D270C3BE20">
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+          LicenseUrl=""
+          Theme="hyperlinkLicense"
+          SuppressOptionsUI="yes" />
+    </BootstrapperApplication>
+    <Chain>
+      <MsiPackage SourceFile="..\Verity.Installer\bin\$(Configuration)\VeritySetup.msi"
+                  Visible="no" />
+    </Chain>
+  </Bundle>
+</Wix>
