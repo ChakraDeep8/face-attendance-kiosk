@@ -30,12 +30,20 @@ class Repository:
         finally: db.close()
 
     def _defaults(self):
-        defaults = {"matchThreshold": .48,"attendanceCooldownMinutes": 10,"alertCooldownSeconds": 15,"snapshotRetentionDays": 30,"modelName": settings.model_name}
+        defaults = {"matchThreshold": .48,"attendanceCooldownMinutes": 10,"alertCooldownSeconds": 15,"snapshotRetentionDays": 30,"modelName": settings.model_name,
+                    "detectionZone":{"x1":.291,"y1":.556,"x2":.628,"y2":.864},
+                    "crossingLine":{"x1":.240,"y1":.927,"x2":.631,"y2":.925}}
         with self.connect() as db:
             for key, value in defaults.items(): db.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",(key,json.dumps(value)))
 
     def settings(self):
         with self.connect() as db: return {row["key"]: json.loads(row["value"]) for row in db.execute("SELECT key,value FROM settings")}
+
+    def set_calibration(self, zone, line):
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('detectionZone',?)",(json.dumps(zone),))
+            db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('crossingLine',?)",(json.dumps(line),))
+            self._audit(db,"monitor.calibration",json.dumps({"zone":zone,"line":line}))
 
     def save_person(self, name, employee_id, image_path, embeddings, model="buffalo_s"):
         now = datetime.now(timezone.utc).isoformat(); person_id = str(uuid.uuid4())
@@ -89,6 +97,14 @@ class Repository:
         with self.connect() as db:
             rows=db.execute("SELECT * FROM events ORDER BY timestamp DESC LIMIT ?",(limit,)).fetchall()
             return [{"id":r["id"],"result":r["result"],"personId":r["person_id"],"displayName":r["display_name"],"confidence":r["confidence"],"timestamp":r["timestamp"],"camera":r["camera"],"snapshotPath":r["snapshot_path"]} for r in rows]
+
+    def delete_event(self, event_id):
+        with self.connect() as db:
+            row=db.execute("SELECT snapshot_path,display_name FROM events WHERE id=?",(event_id,)).fetchone()
+            if not row: return False
+            db.execute("DELETE FROM events WHERE id=?",(event_id,)); self._audit(db,"recognition.event.deleted",f"{event_id}: {row['display_name']}")
+        if row["snapshot_path"]: Path(row["snapshot_path"]).unlink(missing_ok=True)
+        return True
 
     def delete_person(self, person_id):
         with self.connect() as db:

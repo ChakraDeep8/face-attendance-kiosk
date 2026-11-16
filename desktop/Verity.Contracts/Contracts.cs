@@ -29,7 +29,12 @@ public sealed record RecognitionEvent(
     double Confidence,
     DateTimeOffset Timestamp,
     string Camera,
-    string? SnapshotPath);
+    string? SnapshotPath,
+    string? ImageData);
+
+public sealed record CalibrationRectangle(double X1,double Y1,double X2,double Y2);
+public sealed record CalibrationLine(double X1,double Y1,double X2,double Y2);
+public sealed record MonitorCalibration(CalibrationRectangle Zone,CalibrationLine Line);
 
 public sealed record CameraConfiguration(
     CameraSourceType SourceType,

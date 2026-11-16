@@ -4,5 +4,6 @@
              xmlns:local="clr-namespace:Verity.Desktop"
              ShutdownMode="OnMainWindowClose">
     <Application.Resources>
+        <local:IndiaTimeConverter x:Key="IndiaTime" />
     </Application.Resources>
 </Application>

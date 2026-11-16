@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Verity.Contracts;
 using Verity.Desktop.Infrastructure;
 using Verity.Desktop.Services;
@@ -26,8 +27,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private int _enrollmentCaptured;
     private ImageSource? _enrollmentPreview;
     private bool _displayMonitor;
+    private readonly DispatcherTimer _clockTimer;
     private ImageSource? _monitorPreview;
     private string? _editingPersonId;
+    private ImageSource? _selectedEvidence;
+    private bool _evidenceOpen;
+    private string? _calibrationMode;
+    private MonitorCalibration _calibration=new(new(0.291,0.556,0.628,0.864),new(0.240,0.927,0.631,0.925));
 
     public ObservableCollection<PersonSummary> People { get; } = [];
     public ObservableCollection<RecognitionEvent> Events { get; } = [];
@@ -64,6 +70,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public string DisplayButtonText => DisplayMonitor ? "Hide display" : "Display camera";
     public ImageSource? MonitorPreview { get => _monitorPreview; set => Set(ref _monitorPreview, value); }
     public string ActiveProcessor { get => _activeProcessor; set => Set(ref _activeProcessor, value); }
+    public string KolkataTime => TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("India Standard Time")).ToString("dd MMM yyyy, hh:mm:ss tt 'IST'");
+    public string? CalibrationMode { get=>_calibrationMode; set { if(Set(ref _calibrationMode,value)) Raise(nameof(CalibrationInstruction)); } }
+    public string CalibrationInstruction => CalibrationMode switch { "zone"=>"Drag a rectangle around the face detection area", "line"=>"Drag the crossing line in the required direction", _=>"Choose a calibration tool, then draw on the live image" };
+    public MonitorCalibration Calibration { get=>_calibration; private set=>Set(ref _calibration,value); }
+    public ImageSource? SelectedEvidence { get=>_selectedEvidence; set=>Set(ref _selectedEvidence,value); }
+    public bool EvidenceOpen { get=>_evidenceOpen; set=>Set(ref _evidenceOpen,value); }
 
     public ICommand NavigateCommand { get; }
     public ICommand BrowseImageCommand { get; }
@@ -79,10 +91,18 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public ICommand RetakePersonCommand { get; }
     public ICommand DeletePersonCommand { get; }
     public ICommand SavePersonCommand { get; }
+    public ICommand ShowEvidenceCommand { get; }
+    public ICommand CloseEvidenceCommand { get; }
+    public ICommand DeleteEventCommand { get; }
+    public ICommand CalibrateZoneCommand { get; }
+    public ICommand CalibrateLineCommand { get; }
 
     public MainViewModel(WorkerSupervisor supervisor)
     {
         _supervisor = supervisor;
+        _clockTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _clockTimer.Tick += (_, _) => Raise(nameof(KolkataTime));
+        _clockTimer.Start();
         NavigateCommand = new RelayCommand(p => Page = p?.ToString() ?? "Dashboard");
         BrowseImageCommand = new RelayCommand(_ => BrowseImage());
         RegisterCommand = new AsyncCommand(RegisterAsync);
@@ -97,6 +117,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         RetakePersonCommand = new RelayCommand(p => BeginRetake(p as PersonSummary));
         DeletePersonCommand = new RelayCommand(p => _ = DeletePersonAsync(p as PersonSummary));
         SavePersonCommand = new RelayCommand(_ => _ = SavePersonAsync());
+        ShowEvidenceCommand = new RelayCommand(p => ShowEvidence(p as RecognitionEvent));
+        CloseEvidenceCommand = new RelayCommand(_ => EvidenceOpen=false);
+        DeleteEventCommand = new RelayCommand(p => _ = DeleteEventAsync(p as RecognitionEvent));
+        CalibrateZoneCommand = new RelayCommand(_ => CalibrationMode="zone");
+        CalibrateLineCommand = new RelayCommand(_ => CalibrationMode="line");
     }
 
     public async Task InitializeAsync()
@@ -118,6 +143,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             var health = await _client.HealthAsync(); WorkerOnline = health?.Status == "ok"; ModelLoaded = health?.ModelLoaded == true; DatabaseReady = health?.DatabaseReady == true;
             Replace(People, await _client.PeopleAsync() ?? []); Replace(Events, await _client.EventsAsync() ?? []);
+            Calibration=await _client.CalibrationAsync() ?? Calibration;
             var monitor = await _client.MonitorStatusAsync(); Monitoring = monitor?.Running == true; Status = monitor?.Error ?? (Monitoring ? "Continuous monitoring active" : "System ready");
         }
         catch (Exception ex) { Status = ex.Message; WorkerOnline = false; }
@@ -134,6 +160,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         if (_client is null || string.IsNullOrWhiteSpace(Name) || string.IsNullOrWhiteSpace(EmployeeId) || !File.Exists(SelectedImage) || !Consent) { Status = "Name, employee ID, consent, and a face image are required."; return; }
         try
         {
+            // Ensure uploaded-face inference uses the same CPU/GPU choice as Live Monitor.
+            // The worker reports an error if GPU/DirectML is unavailable; no silent fallback is used.
+            await _client.LoadModelsAsync(ActiveProcessor);
             var bytes = await File.ReadAllBytesAsync(SelectedImage); var data = $"data:image/{Path.GetExtension(SelectedImage).Trim('.').Replace("jpg", "jpeg")};base64,{Convert.ToBase64String(bytes)}";
             var encoded = await _client.EncodeImageAsync(data); if (encoded is not { Valid: true }) { Status = encoded?.Message ?? "Image validation failed"; return; }
             var request=new RegisterPersonRequest(Name.Trim(), EmployeeId.Trim(), data, [encoded.Embedding], true);
@@ -164,6 +193,20 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         if (MessageBox.Show($"Delete {person.Name} and all saved face templates? This cannot be undone.","Delete person",MessageBoxButton.YesNo,MessageBoxImage.Warning)!=MessageBoxResult.Yes) return;
         try { await _client.DeletePersonAsync(person.Id); Status=$"{person.Name} deleted"; await RefreshAsync(); }
         catch(Exception ex) { Status=$"Delete failed: {ex.Message}"; }
+    }
+
+    private void ShowEvidence(RecognitionEvent? item)
+    {
+        if (item is null || string.IsNullOrWhiteSpace(item.ImageData)) return;
+        SelectedEvidence=DecodeImage(item.ImageData); EvidenceOpen=true;
+    }
+
+    private async Task DeleteEventAsync(RecognitionEvent? item)
+    {
+        if (_client is null || item is null) return;
+        if(MessageBox.Show($"Delete this {item.Result} log and its evidence image?","Delete event",MessageBoxButton.YesNo,MessageBoxImage.Warning)!=MessageBoxResult.Yes) return;
+        try { await _client.DeleteEventAsync(item.Id); Events.Remove(item); if(LatestEvent?.Id==item.Id) LatestEvent=null; Status="Event deleted"; }
+        catch(Exception ex) { Status=$"Event deletion failed: {ex.Message}"; }
     }
 
     private async Task SavePersonAsync()
@@ -246,6 +289,17 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         _previewCts?.Cancel(); _previewCts = new CancellationTokenSource(); _ = PreviewLoopAsync(_previewCts.Token);
     }
+    public async Task SaveCalibrationAsync(double x1,double y1,double x2,double y2)
+    {
+        if (_client is null || CalibrationMode is null) return;
+        try
+        {
+            if(CalibrationMode=="zone") Calibration=new MonitorCalibration(new(Math.Min(x1,x2),Math.Min(y1,y2),Math.Max(x1,x2),Math.Max(y1,y2)),Calibration.Line);
+            else Calibration=new MonitorCalibration(Calibration.Zone,new(x1,y1,x2,y2));
+            await _client.SaveCalibrationAsync(Calibration); Status=CalibrationMode=="zone"?"Face detection zone saved":"Crossing line saved"; CalibrationMode=null;
+        }
+        catch(Exception ex) { Status=$"Calibration failed: {ex.Message}"; }
+    }
     private async Task PreviewLoopAsync(CancellationToken ct)
     {
         if (_client is null) return;
@@ -274,7 +328,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     private static void Replace<T>(ObservableCollection<T> target, IEnumerable<T> source) { target.Clear(); foreach (var item in source) target.Add(item); }
-    public async ValueTask DisposeAsync() { _eventsCts?.Cancel(); _eventsCts?.Dispose(); _previewCts?.Cancel(); _previewCts?.Dispose(); await _supervisor.DisposeAsync(); }
+    public async ValueTask DisposeAsync() { _clockTimer.Stop(); _eventsCts?.Cancel(); _eventsCts?.Dispose(); _previewCts?.Cancel(); _previewCts?.Dispose(); await _supervisor.DisposeAsync(); }
 }
 
 public sealed class RelayCommand(Action<object?> action, Func<object?, bool>? canExecute = null) : ICommand

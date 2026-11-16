@@ -1,5 +1,5 @@
 from __future__ import annotations
-import argparse, asyncio, base64, json, uuid, cv2
+import argparse, asyncio, base64, json, uuid, cv2, numpy as np
 from pathlib import Path
 from fastapi import FastAPI, Depends, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -90,7 +90,36 @@ def enrollment_status(): return enrollment.status()
 def enrollment_cancel(): enrollment.cancel(); return enrollment.status()
 
 @app.get("/events",dependencies=[Depends(authorize)])
-def events(limit: int=100): return repo.events(min(max(limit,1),1000))
+def events(limit: int=100):
+    result=repo.events(min(max(limit,1),1000))
+    for event in result:
+        path=event.get("snapshotPath"); event["imageData"]=None
+        if not path or not Path(path).exists(): continue
+        image=cv2.imread(path)
+        if image is None: continue
+        height,width=image.shape[:2]; scale=min(240/width,160/height,1); thumb=cv2.resize(image,(max(1,int(width*scale)),max(1,int(height*scale))),interpolation=cv2.INTER_AREA)
+        _,jpeg=cv2.imencode(".jpg",thumb,[cv2.IMWRITE_JPEG_QUALITY,75]); event["imageData"]="data:image/jpeg;base64,"+base64.b64encode(jpeg).decode("ascii")
+    return result
+
+@app.delete("/events/{event_id}",status_code=204,dependencies=[Depends(authorize)])
+def delete_event(event_id: str):
+    if not repo.delete_event(event_id): raise HTTPException(404,"Event not found")
+
+@app.get("/monitor/calibration",dependencies=[Depends(authorize)])
+def get_calibration():
+    values=repo.settings(); return {"zone":values["detectionZone"],"line":values["crossingLine"]}
+
+@app.put("/monitor/calibration",dependencies=[Depends(authorize)])
+def set_calibration(payload: dict):
+    zone=payload.get("zone"); line=payload.get("line")
+    if not zone or not line: raise HTTPException(400,"Both face zone and crossing line are required")
+    required=("x1","y1","x2","y2")
+    try: values=[float(item[key]) for item in (zone,line) for key in required]
+    except (KeyError,TypeError,ValueError): raise HTTPException(400,"Calibration coordinates are invalid")
+    if any(value<0 or value>1 for value in values): raise HTTPException(400,"Calibration coordinates must be between 0 and 1")
+    if abs(float(zone["x2"])-float(zone["x1"]))<.02 or abs(float(zone["y2"])-float(zone["y1"]))<.02: raise HTTPException(400,"Face detection zone is too small")
+    if np.hypot(float(line["x2"])-float(line["x1"]),float(line["y2"])-float(line["y1"]))<.02: raise HTTPException(400,"Crossing line is too short")
+    repo.set_calibration(zone,line); return {"zone":zone,"line":line}
 
 @app.post("/monitor/start",dependencies=[Depends(authorize)])
 def monitor_start(request: MonitorStartRequest): monitor.start(request.camera); return monitor.status()

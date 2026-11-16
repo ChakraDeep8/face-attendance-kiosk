@@ -26,7 +26,14 @@ public sealed class WorkerClient : IAsyncDisposable
     public Task<HealthResponse?> HealthAsync(CancellationToken ct = default) => _http.GetFromJsonAsync<HealthResponse>("health", ct);
     public Task<IReadOnlyList<PersonSummary>?> PeopleAsync(CancellationToken ct = default) => _http.GetFromJsonAsync<IReadOnlyList<PersonSummary>>("people", ct);
     public Task<IReadOnlyList<RecognitionEvent>?> EventsAsync(CancellationToken ct = default) => _http.GetFromJsonAsync<IReadOnlyList<RecognitionEvent>>("events?limit=100", JsonOptions, ct);
+    public async Task DeleteEventAsync(string id,CancellationToken ct=default)
+    { using var response=await _http.DeleteAsync($"events/{Uri.EscapeDataString(id)}",ct); response.EnsureSuccessStatusCode(); }
     public Task<MonitorStatusResponse?> MonitorStatusAsync(CancellationToken ct = default) => _http.GetFromJsonAsync<MonitorStatusResponse>("monitor/status", ct);
+    public Task<MonitorCalibration?> CalibrationAsync(CancellationToken ct = default) => _http.GetFromJsonAsync<MonitorCalibration>("monitor/calibration",JsonOptions,ct);
+    public async Task SaveCalibrationAsync(MonitorCalibration calibration,CancellationToken ct=default)
+    {
+        using var response=await _http.PutAsync("monitor/calibration",JsonContent.Create(calibration,options:JsonOptions),ct); response.EnsureSuccessStatusCode();
+    }
 
     public async Task StartMonitorAsync(CameraConfiguration camera, CancellationToken ct = default)
     {

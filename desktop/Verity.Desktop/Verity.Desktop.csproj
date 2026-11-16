@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <None Include="..\worker\**\*" Link="worker\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Exclude="..\worker\.venv\**;..\worker\__pycache__\**" />
+    <Resource Include="Assets\estpl-logo-trimmed.png" />
   </ItemGroup>
 
   <PropertyGroup>
